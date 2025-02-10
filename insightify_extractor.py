@@ -24,9 +24,11 @@ class InsightifyExtractor:
         image_paths = []
         for img_index, img in enumerate(images):
             xref = img[0]
-            base_image = page.get_image(xref)
-            image_bytes = base_image["image"]
-            image_ext = base_image["ext"]
+            pix = fitz.Pixmap(page.parent, xref)
+            if pix.n > 4:  # this is GRAY or RGB
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+            image_bytes = pix.tobytes()
+            image_ext = "png"
             image = Image.open(io.BytesIO(image_bytes))
             image_path = os.path.join(self.output_dir,
                                       f"{pdf_name}_page_{page_num + 1}_image_{img_index + 1}.{image_ext}")
