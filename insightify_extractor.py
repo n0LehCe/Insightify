@@ -21,8 +21,3 @@ class InsightifyExtractor:
         contents = self.load_and_extract_content()
         for content in contents:
             print(content)
-
-# usage:
-# load_dotenv()
-# pdf_extractor = InsightifyExtractor(input_dir="./test_PDF", result_type="markdown")
-# pdf_extractor.print_extracted_content()
