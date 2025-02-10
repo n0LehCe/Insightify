@@ -1,7 +1,8 @@
+import os, fitz, io, torch
+from PIL import Image
 from llama_parse import LlamaParse
 from llama_index.core import SimpleDirectoryReader
-import os, fitz, io
-from PIL import Image
+from transformers import DetrImageProcessor, DetrForObjectDetection
 
 
 class InsightifyExtractor:
@@ -15,9 +16,12 @@ class InsightifyExtractor:
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
 
+        # use Hugging Face Model for transformers
+        self.processor = DetrImageProcessor.from_pretrained("microsoft/table-transformer-detection")
+        self.model = DetrForObjectDetection.from_pretrained("microsoft/table-transformer-detection")
+
     def extract_text_from_page(self, page):
-        text = page.get_text()
-        return text
+        return page.get_text()
 
     def extract_images_from_page(self, page, page_num, pdf_name):
         images = page.get_images(full=True)
@@ -36,6 +40,28 @@ class InsightifyExtractor:
             image_paths.append(image_path)
             print(f"Saved image: {image_path}")
         return image_paths
+
+    def extract_tables_from_page(self, page, page_num, pdf_name):
+        # convert page to image
+        pix = page.get_pixmap()
+        img = Image.open(io.BytesIO(pix.tobytes()))
+
+        # detect tables
+        inputs = self.processor(images=img, return_tensors="pt")
+        outputs = self.model(**inputs)
+        target_sizes = torch.tensor([img.size[::-1]])
+        results = self.processor.post_process_object_detection(outputs, target_sizes=target_sizes, threshold=0.9)[0]
+
+        # save table as image
+        table_paths = []
+        for i, box in enumerate(results["boxes"]):
+            table_img = img.crop((box[0], box[1], box[2], box[3]))
+            table_path = os.path.join(self.output_dir,
+                                      f"{pdf_name}_page_{page_num + 1}_table_{i + 1}.png")
+            table_img.save(table_path)
+            table_paths.append(table_path)
+            print(f"Saved table image: {table_path}")
+        return table_paths
 
     def load_and_extract_content(self):
         # dir_reader to load pdfs
@@ -67,11 +93,13 @@ class InsightifyExtractor:
                 page = pdf_document.load_page(page_num)
                 page_text = self.extract_text_from_page(page)
                 page_image_paths = self.extract_images_from_page(page, page_num, pdf_name)
+                page_table_paths = self.extract_tables_from_page(page, page_num, pdf_name)
                 extracted_contents.append({
                     "pdf_name": pdf_name,
                     "page_number": page_num + 1,
                     "text": page_text,
-                    "images": page_image_paths
+                    "images": page_image_paths,
+                    "tables": page_table_paths
                 })
         return extracted_contents
 
@@ -86,6 +114,10 @@ class InsightifyExtractor:
                     md.write(f"## Images\n\n")
                     for image_path in content["images"]:
                         md.write(f"![Image](file:///{os.path.abspath(image_path)})\n\n")
+                if content["tables"]:
+                    md.write(f"## Tables\n\n")
+                    for table_path in content["tables"]:
+                        md.write(f"![Table](file:///{os.path.abspath(table_path)})\n\n")
                 md.write("\n")
 
     def dump_to_markdown_helper(self):
