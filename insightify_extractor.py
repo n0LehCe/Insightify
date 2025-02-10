@@ -85,7 +85,7 @@ class InsightifyExtractor:
                 if content["images"]:
                     md.write(f"## Images\n\n")
                     for image_path in content["images"]:
-                        md.write(f"![Image](file://{os.path.abspath(image_path)})\n\n")
+                        md.write(f"![Image](file:///{os.path.abspath(image_path)})\n\n")
                 md.write("\n")
 
     def dump_to_markdown_helper(self):
