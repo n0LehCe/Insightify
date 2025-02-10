@@ -40,12 +40,18 @@ class InsightifyExtractor:
         documents = self.reader.load_data()
         extracted_contents = []
 
+        # introduce sets to avoid multiple process same files
+        processed_files = set()
+
         # traverse the pdfs
         for document in documents:
             # Get the file path from the document metadata
             file_path = document.metadata.get('file_path')
-            if not file_path:
+            if not file_path or file_path in processed_files:
                 continue
+
+            # add current file path to the sets for future check
+            processed_files.add(file_path)
 
             # open a single PDF
             pdf_name = os.path.basename(file_path).replace(" ", "_")
