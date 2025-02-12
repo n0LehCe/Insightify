@@ -131,6 +131,22 @@ class InsightifyExtractor:
                 })
         return extracted_contents
 
+    def convert_csv_to_markdown(self, csv_path):
+        with open(csv_path, "r", encoding="utf-8") as file:
+            lines = file.readlines()
+
+            # generates the header and rows
+            headers = lines[0].strip().split(",")
+            rows = [line.strip().split(",") for line in lines[1:]]
+
+            # generates markdown readable format of the table
+            markdown_table = "| " + " | ".join(headers) + " |\n"
+            markdown_table += "| " + " | ".join(["---"] * len(headers)) + " |\n"
+            for row in rows:
+                markdown_table += "| " + " | ".join(row) + " |\n"
+
+        return markdown_table
+
     def dump_to_markdown(self, output_path_to_md):
         contents = self.load_and_extract_content()
         full_output_path = os.path.join(self.output_dir, output_path_to_md)
@@ -149,7 +165,9 @@ class InsightifyExtractor:
                 if content["tables_structured"]:
                     md.write(f"## Structured Tables\n\n")
                     for table_path in content["tables_structured"]:
-                        md.write(f"[Table CSV]({os.path.abspath(table_path)})\n\n")
+                        print(table_path)
+                        markdown_table = self.convert_csv_to_markdown(table_path)
+                        md.write(markdown_table + "\n\n")
                 md.write("\n")
 
     def dump_to_markdown_helper(self):
