@@ -2,3 +2,6 @@
 /test_pdf
 /myenv
 .env
+Insightify.spec
+/build
+/dist
