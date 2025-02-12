@@ -21,7 +21,11 @@ class InsightifyExtractor:
         self.model = DetrForObjectDetection.from_pretrained("microsoft/table-transformer-detection")
 
     def extract_text_from_page(self, page):
-        return page.get_text()
+        try:
+            return page.get_text()
+        except Exception as e:
+            print(f"Error extracting text from page: {e}")
+            return ""
 
     def extract_images_from_page(self, page, page_num, pdf_name):
         images = page.get_images(full=True)
@@ -79,15 +83,19 @@ class InsightifyExtractor:
     #         return []
 
     def extract_tables_structured_from_page(self, file_path, page_num, pdf_name):
-        tables = camelot.read_pdf(file_path, pages=str(page_num + 1))
-        table_paths = []
-        for i, table in enumerate(tables):
-            table_path = os.path.join(self.output_dir,
-                                      f"{pdf_name}_page_{page_num + 1}_table_{i + 1}.csv")
-            table.to_csv(table_path)
-            table_paths.append(table_path)
-            print(f"Saved table CSV: {table_path}")
-        return table_paths
+        try:
+            tables = camelot.read_pdf(file_path, pages=str(page_num + 1))
+            table_paths = []
+            for i, table in enumerate(tables):
+                table_path = os.path.join(self.output_dir,
+                                          f"{pdf_name}_page_{page_num + 1}_table_{i + 1}.csv")
+                table.to_csv(table_path)
+                table_paths.append(table_path)
+                print(f"Saved table CSV: {table_path}")
+            return table_paths
+        except Exception as e:
+            print(f"Error extracting tables from structured page: {e}")
+            return []
 
     def load_and_extract_content(self):
         # dir_reader to load pdfs
@@ -129,6 +137,7 @@ class InsightifyExtractor:
                     # "tables_scanned": page_table_scanned_paths,
                     "tables_structured": page_table_structured_paths
                 })
+            pdf_document.close()
         return extracted_contents
 
     def convert_csv_to_markdown(self, csv_path):
@@ -165,7 +174,6 @@ class InsightifyExtractor:
                 if content["tables_structured"]:
                     md.write(f"## Structured Tables\n\n")
                     for table_path in content["tables_structured"]:
-                        print(table_path)
                         markdown_table = self.convert_csv_to_markdown(table_path)
                         md.write(markdown_table + "\n\n")
                 md.write("\n")
