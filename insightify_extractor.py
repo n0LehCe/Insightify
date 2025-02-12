@@ -1,4 +1,4 @@
-import os, fitz, io, torch, camelot
+import os, fitz, io, torch, camelot, tempfile
 from PIL import Image
 from llama_parse import LlamaParse
 from llama_index.core import SimpleDirectoryReader
@@ -24,57 +24,59 @@ class InsightifyExtractor:
         return page.get_text()
 
     def extract_images_from_page(self, page, page_num, pdf_name):
-        try:
-            images = page.get_images(full=True)
-            image_paths = []
-            for img_index, img in enumerate(images):
-                xref = img[0]
-                pix = fitz.Pixmap(page.parent, xref)
-                if pix.n > 4:  # this is GRAY or RGB
-                    pix = fitz.Pixmap(fitz.csRGB, pix)
-                image_bytes = pix.tobytes()
-                image_ext = "png"
-                image = Image.open(io.BytesIO(image_bytes))
-                image_path = os.path.join(self.output_dir,
-                                          f"{pdf_name}_page_{page_num + 1}_image_{img_index + 1}.{image_ext}")
-                image.save(image_path)
-                image_paths.append(image_path)
-                print(f"Saved image: {image_path}")
-            return image_paths
-        except Exception as e:
-            print(f"Error extracting images from page: {e}")
-        finally:
-            page.close()
+        images = page.get_images(full=True)
+        image_paths = []
+        for img_index, img in enumerate(images):
+            xref = img[0]
+            pix = fitz.Pixmap(page.parent, xref)
+            if pix.n > 4:  # this is GRAY or RGB
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+            image_bytes = pix.tobytes()
+            image_ext = "png"
+            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                temp_file.write(image_bytes)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+                with Image.open(temp_file.name) as image:
+                    image_path = os.path.join(self.output_dir,
+                                              f"{pdf_name}_page_{page_num + 1}_image_{img_index + 1}.{image_ext}")
+                    image.save(image_path)
+                    image_paths.append(image_path)
+                    print(f"Saved image: {image_path}")
+            os.remove(temp_file.name)
+        return image_paths
 
-
-    def extract_tables_from_scanned_page(self, page, page_num, pdf_name):
-        try:
-            # convert page to image
-            pix = page.get_pixmap()
-            img = Image.open(io.BytesIO(pix.tobytes()))
-
-            # detect tables
-            inputs = self.processor(images=img, return_tensors="pt")
-            outputs = self.model(**inputs)
-            target_sizes = torch.tensor([img.size[::-1]])
-            results = self.processor.post_process_object_detection(outputs, target_sizes=target_sizes, threshold=0.9)[0]
-
-            # save table as image
-            table_scanned_paths = []
-            for i, box in enumerate(results["boxes"]):
-                table_img = img.crop((box[0], box[1], box[2], box[3]))
-                table_path = os.path.join(self.output_dir,
-                                          f"{pdf_name}_page_{page_num + 1}_table_{i + 1}.png")
-                table_img.save(table_path)
-                table_scanned_paths.append(table_path)
-                print(f"Saved table image: {table_path}")
-            return table_scanned_paths
-        except Exception as e:
-            print(f"Error extracting tables from scanned page: {e}")
-        finally:
-            page.close()
-
-
+    # def extract_tables_from_scanned_page(self, page, page_num, pdf_name):
+    #     try:
+    #         # convert page to image
+    #         pix = page.get_pixmap()
+    #         image_bytes = pix.tobytes()
+    #         with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+    #             temp_file.write(image_bytes)
+    #             temp_file.flush()
+    #             os.fsync(temp_file.fileno())
+    #             with Image.open(temp_file.name) as img:
+    #                 # detect tables
+    #                 inputs = self.processor(images=img, return_tensors="pt", size={'height': 800, 'width': 600})
+    #                 outputs = self.model(**inputs)
+    #                 target_sizes = torch.tensor([img.size[::-1]])
+    #                 results = \
+    #                 self.processor.post_process_object_detection(outputs, target_sizes=target_sizes, threshold=0.9)[0]
+    #
+    #                 # save table as image
+    #                 table_scanned_paths = []
+    #                 for i, box in enumerate(results["boxes"]):
+    #                     table_img = img.crop((box[0], box[1], box[2], box[3]))
+    #                     table_path = os.path.join(self.output_dir,
+    #                                               f"{pdf_name}_page_{page_num + 1}_table_{i + 1}.png")
+    #                     table_img.save(table_path)
+    #                     table_scanned_paths.append(table_path)
+    #                     print(f"Saved table image: {table_path}")
+    #             os.remove(temp_file.name)
+    #         return table_scanned_paths
+    #     except Exception as e:
+    #         print(f"Error extracting tables from scanned page: {e}")
+    #         return []
 
     def extract_tables_structured_from_page(self, file_path, page_num, pdf_name):
         tables = camelot.read_pdf(file_path, pages=str(page_num + 1))
@@ -86,7 +88,6 @@ class InsightifyExtractor:
             table_paths.append(table_path)
             print(f"Saved table CSV: {table_path}")
         return table_paths
-
 
     def load_and_extract_content(self):
         # dir_reader to load pdfs
@@ -118,18 +119,17 @@ class InsightifyExtractor:
                 page = pdf_document.load_page(page_num)
                 page_text = self.extract_text_from_page(page)
                 page_image_paths = self.extract_images_from_page(page, page_num, pdf_name)
-                page_table_scanned_paths = self.extract_tables_from_scanned_page(page, page_num, pdf_name)
+                # page_table_scanned_paths = self.extract_tables_from_scanned_page(page, page_num, pdf_name)
                 page_table_structured_paths = self.extract_tables_structured_from_page(file_path, page_num, pdf_name)
                 extracted_contents.append({
                     "pdf_name": pdf_name,
                     "page_number": page_num + 1,
                     "text": page_text,
                     "images": page_image_paths,
-                    "tables_scanned": page_table_scanned_paths,
+                    # "tables_scanned": page_table_scanned_paths,
                     "tables_structured": page_table_structured_paths
                 })
         return extracted_contents
-
 
     def dump_to_markdown(self, output_path_to_md):
         contents = self.load_and_extract_content()
@@ -142,16 +142,15 @@ class InsightifyExtractor:
                     md.write(f"## Images\n\n")
                     for image_path in content["images"]:
                         md.write(f"![Image](file:///{os.path.abspath(image_path)})\n\n")
-                if content["tables_scanned"]:
-                    md.write(f"## Scanned Tables\n\n")
-                    for table_path in content["tables_scanned"]:
-                        md.write(f"![Table](file:///{os.path.abspath(table_path)})\n\n")
+                # if content["tables_scanned"]:
+                #     md.write(f"## Scanned Tables\n\n")
+                #     for table_path in content["tables_scanned"]:
+                #         md.write(f"![Table](file:///{os.path.abspath(table_path)})\n\n")
                 if content["tables_structured"]:
                     md.write(f"## Structured Tables\n\n")
                     for table_path in content["tables_structured"]:
-                        md.write(f"![Table CSV](file:///{os.path.abspath(table_path)})\n\n")
+                        md.write(f"[Table CSV]({os.path.abspath(table_path)})\n\n")
                 md.write("\n")
-
 
     def dump_to_markdown_helper(self):
         self.dump_to_markdown("test_output.md")
