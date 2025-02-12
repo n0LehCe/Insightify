@@ -41,7 +41,7 @@ class InsightifyExtractor:
             print(f"Saved image: {image_path}")
         return image_paths
 
-    def extract_tables_from_page(self, page, page_num, pdf_name):
+    def extract_tables_from_scanned_page(self, page, page_num, pdf_name):
         # convert page to image
         pix = page.get_pixmap()
         img = Image.open(io.BytesIO(pix.tobytes()))
@@ -93,7 +93,7 @@ class InsightifyExtractor:
                 page = pdf_document.load_page(page_num)
                 page_text = self.extract_text_from_page(page)
                 page_image_paths = self.extract_images_from_page(page, page_num, pdf_name)
-                page_table_paths = self.extract_tables_from_page(page, page_num, pdf_name)
+                page_table_paths = self.extract_tables_from_scanned_page(page, page_num, pdf_name)
                 extracted_contents.append({
                     "pdf_name": pdf_name,
                     "page_number": page_num + 1,
