@@ -1,0 +1,35 @@
+Class Diagram:
++-------------------------------------------------------------------------------+
+|				InsightifyExtractor 				|
++-------------------------------------------------------------------------------+
+| - input_dir: str           							|
+| - output_dir: str          							|
+| - result_type: str         							|
+| - parser: LlamaParse       							|
+| - file_extractor: dict     							|
+| - reader: SimpleDirectoryReader 						|
+| - processor: DetrImageProcessor 						|
+| - model: DetrForObjectDetection 						|
++-------------------------------------------------------------------------------+
+| + __init__(self, input_dir, output_dir, result_type="text", api_key=None) 	|
+| + extract_text_from_page(self, page) 						|
+| + extract_images_from_page(self, page, page_num, pdf_name) 			|
+| + extract_tables_structured_from_page(self, file_path, page_num, pdf_name) 	|
+| + load_and_extract_content(self) 						|
+| + convert_csv_to_markdown(self, csv_path) 					|
+| + dump_to_markdown(self, output_path_to_md) 					|
+| + dump_to_markdown_helper(self) 						|
++-------------------------------------------------------------------------------+
+
+Sequence Diagram:
+User                  GUI                  		InsightifyExtractor		PDFProcessor        			ObjectDetectionProcessor
+ |                     |                            		|                      		|                          		|
+ |--select_file()----->|                            		|                      		|                          		|
+ |                     |--call_load_and_extract_content()------>|				|                          		|
+ |                     |                            		|--process_pdf()--------------->|                          		|
+ |                     |                            		|                      		|--extract_text_from_page()		|
+ |                     |                            		|                      		|--extract_images_from_page()		|
+ |                     |                            		|                      		|--extract_tables_structured_from_page()|
+ |                     |                            		|--call_object_detection()----->|					|
+ |                     |                            		|                      		|--detect_objects()         		|
+ |                     |<----display_output---------------------|                      		|                          		|
