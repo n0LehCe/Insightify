@@ -1,4 +1,4 @@
-import os, fitz, io, torch, camelot, tempfile
+import os, fitz, io, torch, camelot, tempfile, csv
 from PIL import Image
 from llama_parse import LlamaParse
 from llama_index.core import SimpleDirectoryReader
@@ -20,12 +20,19 @@ class InsightifyExtractor:
         self.processor = DetrImageProcessor.from_pretrained("microsoft/table-transformer-detection")
         self.model = DetrForObjectDetection.from_pretrained("microsoft/table-transformer-detection")
 
-    def extract_text_from_page(self, page):
+    def extract_text_from_page(self, page, table_content, page_num):
         try:
-            return page.get_text()
+            extracted_text = ""
+            words = page.get_text("words")  # Get text as a list of words with coordinates
+            text_series = " ".join([word[4] for word in words])
+
+            for content, content_page_num in table_content.items():
+                if content_page_num == page_num:
+                    text_series = text_series.replace(content, '')
+            return text_series.strip()
         except Exception as e:
             print(f"Error extracting text from page: {e}")
-            return ""
+            return
 
     def extract_images_from_page(self, page, page_num, pdf_name):
         images = page.get_images(full=True)
@@ -95,14 +102,21 @@ class InsightifyExtractor:
             return table_paths
         except Exception as e:
             print(f"Error extracting tables from structured page: {e}")
-            return []
+            return
+
+    def load_table_content(self, table_paths, page_num):
+        table_content = {}
+        for table_path in table_paths:
+            with open(table_path, "r", encoding="utf-8") as csv_file:
+                reader = csv.reader(csv_file)
+                for row in reader:
+                    content = " ".join([cell.strip() for cell in row])
+                    table_content[content] = page_num
+        return table_content
 
     def load_and_extract_content(self):
-        # dir_reader to load pdfs
         documents = self.reader.load_data()
         extracted_contents = []
-
-        # introduce sets to avoid multiple process same files
         processed_files = set()
 
         # traverse the pdfs
@@ -111,30 +125,26 @@ class InsightifyExtractor:
             file_path = document.metadata.get('file_path')
             if not file_path or file_path in processed_files:
                 continue
-
-            # add current file path to the sets for future check
             processed_files.add(file_path)
 
             # open a single PDF
             pdf_name = os.path.basename(file_path).replace(" ", "_")
             pdf_document = fitz.open(file_path)
-
             print(f"Processing PDF: {pdf_name}")
 
             # traverse pages in PDF
             for page_num in range(len(pdf_document)):
                 print(f"Processing page {page_num + 1} of {pdf_name}")
                 page = pdf_document.load_page(page_num)
-                page_text = self.extract_text_from_page(page)
-                page_image_paths = self.extract_images_from_page(page, page_num, pdf_name)
-                # page_table_scanned_paths = self.extract_tables_from_scanned_page(page, page_num, pdf_name)
                 page_table_structured_paths = self.extract_tables_structured_from_page(file_path, page_num, pdf_name)
+                table_content = self.load_table_content(page_table_structured_paths, page_num)
+                page_text = self.extract_text_from_page(page, table_content, page_num)
+                page_image_paths = self.extract_images_from_page(page, page_num, pdf_name)
                 extracted_contents.append({
                     "pdf_name": pdf_name,
                     "page_number": page_num + 1,
                     "text": page_text,
                     "images": page_image_paths,
-                    # "tables_scanned": page_table_scanned_paths,
                     "tables_structured": page_table_structured_paths
                 })
             pdf_document.close()
