@@ -1,24 +1,69 @@
 import os, fitz, io, torch, camelot, tempfile, csv
-from PIL import Image
 from llama_parse import LlamaParse
 from llama_index.core import SimpleDirectoryReader
 from transformers import DetrImageProcessor, DetrForObjectDetection
+from azure.cognitiveservices.vision.computervision import ComputerVisionClient
+from azure.cognitiveservices.vision.computervision.models import VisualFeatureTypes
+from msrest.authentication import CognitiveServicesCredentials
+from PIL import Image, PngImagePlugin
 
 
 class InsightifyExtractor:
-    def __init__(self, input_dir, output_dir, result_type="text", api_key=None):
-        self.input_dir = input_dir
+    def __init__(self, file_path, output_dir, result_type="text", LlamaParse_key=None, vision_key=None,
+                 vision_endpoint=None):
+        self.file_path = file_path
         self.output_dir = output_dir
         self.result_type = result_type
-        self.parser = LlamaParse(result_type=self.result_type, api_key=api_key)
+        self.parser = LlamaParse(result_type=self.result_type, api_key=LlamaParse_key)
         self.file_extractor = {".pdf": self.parser}
-        self.reader = SimpleDirectoryReader(input_dir=self.input_dir, file_extractor=self.file_extractor)
+        # self.reader = SimpleDirectoryReader(input_dir=self.input_dir, file_extractor=self.file_extractor)
+        self.vision_client = ComputerVisionClient(vision_endpoint, CognitiveServicesCredentials(vision_key))
+
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
 
         # use Hugging Face Model for transformers
-        self.processor = DetrImageProcessor.from_pretrained("microsoft/table-transformer-detection")
+        self.processor = DetrImageProcessor.from_pretrained("microsoft/table-transformer-detection",
+                                                            size={'longest_edge': 800})
         self.model = DetrForObjectDetection.from_pretrained("microsoft/table-transformer-detection")
+
+    def interpret_image(self, image_path):
+        try:
+            with open(image_path, "rb") as image_stream:
+                analysis = self.vision_client.analyze_image_in_stream(
+                    image_stream, visual_features=[VisualFeatureTypes.description, VisualFeatureTypes.tags,
+                                                   VisualFeatureTypes.objects]
+                )
+
+            captions = analysis.description.captions
+            description = captions[0].text if captions else "No description available."
+            tags = [tag.name for tag in analysis.tags] if analysis.tags else []
+            tags_text = ", ".join(tags) if tags else "No tags available."
+            objects = [obj.object_property for obj in analysis.objects] if analysis.objects else []
+            objects_text = ", ".join(objects) if objects else "No objects detected."
+            detailed_description = f"{description}. Tags: {tags_text}. Objects detected: {objects_text}."
+            img = Image.open(image_path)
+            meta = PngImagePlugin.PngInfo()
+            meta.add_text("Description", detailed_description)
+            img.save(image_path, pnginfo=meta)
+
+            print(f"Image Description: {detailed_description}")
+            img.close()
+            return detailed_description
+        except Exception as e:
+            print(f"Error interpreting image: {e}")
+            return "Error interpreting image."
+
+    def view_image_metadata(self, image_path):
+        try:
+            img = Image.open(image_path)
+            metadata = img.info
+            description = metadata.get("Description", "No description found.")
+            img.close()
+            return description
+        except Exception as e:
+            print(f"Error reading metadata: {e}")
+            return None
 
     def extract_text_from_page(self, page, table_content, page_num):
         try:
@@ -34,60 +79,28 @@ class InsightifyExtractor:
             print(f"Error extracting text from page: {e}")
             return
 
-    def extract_images_from_page(self, page, page_num, pdf_name):
+    def extract_images_from_page(self, page, page_num):
         images = page.get_images(full=True)
         image_paths = []
         for img_index, img in enumerate(images):
-            xref = img[0]
-            pix = fitz.Pixmap(page.parent, xref)
-            if pix.n > 4:  # this is GRAY or RGB
-                pix = fitz.Pixmap(fitz.csRGB, pix)
-            image_bytes = pix.tobytes()
-            image_ext = "png"
-            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-                temp_file.write(image_bytes)
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-                with Image.open(temp_file.name) as image:
-                    image_path = os.path.join(self.output_dir,
-                                              f"{pdf_name}_page_{page_num + 1}_image_{img_index + 1}.{image_ext}")
-                    image.save(image_path)
-                    image_paths.append(image_path)
-                    print(f"Saved image: {image_path}")
-            os.remove(temp_file.name)
+            try:
+                xref = img[0]
+                pix = fitz.Pixmap(page.parent, xref)
+                if pix.n > 4:
+                    pix = fitz.Pixmap(fitz.csRGB, pix)  # Convert to RGB if necessary
+                image_path = os.path.join(
+                    self.output_dir,
+                    f"{os.path.basename(self.file_path)}_page_{page_num + 1}_image_{img_index + 1}.png"
+                )
+                pix.save(image_path)
+                image_paths.append(image_path)
+                print(f"Saved image: {image_path}")
+                self.interpret_image(image_path)
+                self.view_image_metadata(image_path)
+                pix = None
+            except Exception as e:
+                print(f"Error processing image {img_index + 1} on page {page_num + 1}: {e}")
         return image_paths
-
-    # def extract_tables_from_scanned_page(self, page, page_num, pdf_name):
-    #     try:
-    #         # convert page to image
-    #         pix = page.get_pixmap()
-    #         image_bytes = pix.tobytes()
-    #         with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-    #             temp_file.write(image_bytes)
-    #             temp_file.flush()
-    #             os.fsync(temp_file.fileno())
-    #             with Image.open(temp_file.name) as img:
-    #                 # detect tables
-    #                 inputs = self.processor(images=img, return_tensors="pt", size={'height': 800, 'width': 600})
-    #                 outputs = self.model(**inputs)
-    #                 target_sizes = torch.tensor([img.size[::-1]])
-    #                 results = \
-    #                 self.processor.post_process_object_detection(outputs, target_sizes=target_sizes, threshold=0.9)[0]
-    #
-    #                 # save table as image
-    #                 table_scanned_paths = []
-    #                 for i, box in enumerate(results["boxes"]):
-    #                     table_img = img.crop((box[0], box[1], box[2], box[3]))
-    #                     table_path = os.path.join(self.output_dir,
-    #                                               f"{pdf_name}_page_{page_num + 1}_table_{i + 1}.png")
-    #                     table_img.save(table_path)
-    #                     table_scanned_paths.append(table_path)
-    #                     print(f"Saved table image: {table_path}")
-    #             os.remove(temp_file.name)
-    #         return table_scanned_paths
-    #     except Exception as e:
-    #         print(f"Error extracting tables from scanned page: {e}")
-    #         return []
 
     def extract_tables_structured_from_page(self, file_path, page_num, pdf_name):
         try:
@@ -115,50 +128,45 @@ class InsightifyExtractor:
         return table_content
 
     def load_and_extract_content(self):
-        documents = self.reader.load_data()
         extracted_contents = []
-        processed_files = set()
+        pdf_name = os.path.basename(self.file_path).replace(" ", "_")
+        pdf_document = fitz.open(self.file_path)
+        print(f"Processing PDF: {pdf_name}")
 
-        # traverse the pdfs
-        for document in documents:
-            # Get the file path from the document metadata
-            file_path = document.metadata.get('file_path')
-            if not file_path or file_path in processed_files:
-                continue
-            processed_files.add(file_path)
+        for page_num in range(len(pdf_document)):
+            print(f"Processing page {page_num + 1} of {pdf_name}")
+            page = pdf_document.load_page(page_num)
 
-            # open a single PDF
-            pdf_name = os.path.basename(file_path).replace(" ", "_")
-            pdf_document = fitz.open(file_path)
-            print(f"Processing PDF: {pdf_name}")
+            page_table_structured_paths = self.extract_tables_structured_from_page(self.file_path, page_num, pdf_name)
+            table_content = self.load_table_content(page_table_structured_paths, page_num)
+            page_text = self.extract_text_from_page(page, table_content, page_num)
+            page_image_paths = self.extract_images_from_page(page, page_num)
 
-            # traverse pages in PDF
-            for page_num in range(len(pdf_document)):
-                print(f"Processing page {page_num + 1} of {pdf_name}")
-                page = pdf_document.load_page(page_num)
-                page_table_structured_paths = self.extract_tables_structured_from_page(file_path, page_num, pdf_name)
-                table_content = self.load_table_content(page_table_structured_paths, page_num)
-                page_text = self.extract_text_from_page(page, table_content, page_num)
-                page_image_paths = self.extract_images_from_page(page, page_num, pdf_name)
-                extracted_contents.append({
-                    "pdf_name": pdf_name,
-                    "page_number": page_num + 1,
-                    "text": page_text,
-                    "images": page_image_paths,
-                    "tables_structured": page_table_structured_paths
-                })
-            pdf_document.close()
+            extracted_contents.append({
+                "pdf_name": pdf_name,
+                "page_number": page_num + 1,
+                "text": page_text,
+                "images": page_image_paths,
+                "tables_structured": page_table_structured_paths,
+            })
+            page = None
+        pdf_document.close()
         return extracted_contents
 
     def convert_csv_to_markdown(self, csv_path):
         with open(csv_path, "r", encoding="utf-8") as file:
             lines = file.readlines()
-
-            # generates the header and rows
-            headers = lines[0].strip().split(",")
-            rows = [line.strip().split(",") for line in lines[1:]]
-
-            # generates markdown readable format of the table
+            if not lines or all(line.strip().replace(",", "").replace('"', '') == '' for line in lines):
+                print(f"Skipping empty table in {csv_path}")
+                return ""
+            headers = [header.strip().replace('"', '') for header in lines[0].strip().split(",")]
+            rows = [
+                [cell.strip().replace('"', '') for cell in line.strip().split(",")]
+                for line in lines[1:] if line.strip().replace(",", "").replace('"', '') != ''
+            ]
+            if not rows:
+                print(f"Skipping table with no valid rows in {csv_path}")
+                return ""
             markdown_table = "| " + " | ".join(headers) + " |\n"
             markdown_table += "| " + " | ".join(["---"] * len(headers)) + " |\n"
             for row in rows:
@@ -169,23 +177,27 @@ class InsightifyExtractor:
     def dump_to_markdown(self, output_path_to_md):
         contents = self.load_and_extract_content()
         full_output_path = os.path.join(self.output_dir, output_path_to_md)
+
         with open(full_output_path, "w", encoding="utf-8") as md:
             for content in contents:
                 md.write(f"# {content['pdf_name']} - Page {content['page_number']}\n\n")
                 md.write(f"## Text\n\n{content['text']}\n\n")
+
                 if content["images"]:
                     md.write(f"## Images\n\n")
                     for image_path in content["images"]:
+                        description = self.view_image_metadata(image_path)
                         md.write(f"![Image](file:///{os.path.abspath(image_path)})\n\n")
-                # if content["tables_scanned"]:
-                #     md.write(f"## Scanned Tables\n\n")
-                #     for table_path in content["tables_scanned"]:
-                #         md.write(f"![Table](file:///{os.path.abspath(table_path)})\n\n")
+                        md.write(f"*Description:* {description}\n\n")
                 if content["tables_structured"]:
                     md.write(f"## Structured Tables\n\n")
                     for table_path in content["tables_structured"]:
                         markdown_table = self.convert_csv_to_markdown(table_path)
-                        md.write(markdown_table + "\n\n")
+                        if markdown_table == "":
+                            md.write("No structured table\n\n")
+                        else:
+                            md.write(markdown_table + "\n\n")
+
                 md.write("\n")
 
     def dump_to_markdown_helper(self):

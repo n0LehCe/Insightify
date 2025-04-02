@@ -13,7 +13,7 @@ def clear_output_directory(directory):
 
 def select_file():
     root = tk.Tk()
-    root.withdraw()  # Hide the main window
+    root.withdraw()
     file_path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
     return file_path
 
@@ -24,9 +24,14 @@ clear_output_directory(output_dir)
 
 input_file = select_file()
 if input_file:
-    extractor = InsightifyExtractor(input_dir=os.path.dirname(input_file), output_dir=output_dir,
-                                    result_type="markdown",
-                                    api_key=os.getenv("LLAMA_API_KEY"))
+    extractor = InsightifyExtractor(
+        file_path=input_file,
+        output_dir=output_dir,
+        result_type="markdown",
+        LlamaParse_key=os.getenv("LLAMA_API_KEY"),
+        vision_key=os.getenv("VISION_KEY"),
+        vision_endpoint=os.getenv("VISION_ENDPOINT")
+    )
     extractor.dump_to_markdown_helper()
 else:
     print("No file selected.")
