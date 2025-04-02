@@ -1,6 +1,5 @@
-import os, fitz, io, torch, camelot, tempfile, csv
+import os, fitz, camelot, csv, markdown, webbrowser
 from llama_parse import LlamaParse
-from llama_index.core import SimpleDirectoryReader
 from transformers import DetrImageProcessor, DetrForObjectDetection
 from azure.cognitiveservices.vision.computervision import ComputerVisionClient
 from azure.cognitiveservices.vision.computervision.models import VisualFeatureTypes
@@ -12,7 +11,7 @@ class InsightifyExtractor:
     def __init__(self, file_path, output_dir, result_type="text", LlamaParse_key=None, vision_key=None,
                  vision_endpoint=None):
         self.file_path = file_path
-        self.output_dir = output_dir
+        self.output_dir = os.path.abspath(output_dir)
         self.result_type = result_type
         self.parser = LlamaParse(result_type=self.result_type, api_key=LlamaParse_key)
         self.file_extractor = {".pdf": self.parser}
@@ -175,31 +174,53 @@ class InsightifyExtractor:
         return markdown_table
 
     def dump_to_markdown(self, output_path_to_md):
-        contents = self.load_and_extract_content()
-        full_output_path = os.path.join(self.output_dir, output_path_to_md)
+        try:
+            full_output_path = os.path.join(self.output_dir, os.path.basename(output_path_to_md))
+            contents = self.load_and_extract_content()
+            with open(full_output_path, "w", encoding="utf-8") as md:
+                for content in contents:
+                    md.write(f"# {content['pdf_name']} - Page {content['page_number']}\n\n")
+                    md.write(f"## Text\n\n{content['text']}\n\n")
+                    if content["images"]:
+                        md.write(f"## Images\n\n")
+                        for image_path in content["images"]:
+                            description = self.view_image_metadata(image_path)
+                            md.write(f"![Image](file:///{os.path.abspath(image_path)})\n\n")
+                            md.write(f"*Description:* {description}\n\n")
+                    if content["tables_structured"]:
+                        md.write(f"## Structured Tables\n\n")
+                        for table_path in content["tables_structured"]:
+                            markdown_table = self.convert_csv_to_markdown(table_path)
+                            if markdown_table == "":
+                                md.write("No structured table\n\n")
+                            else:
+                                md.write(markdown_table + "\n\n")
+                    md.write("\n")
+            print(f"Markdown file saved at: {full_output_path}")
+            return full_output_path
+        except Exception as e:
+            print(f"Error during Markdown file saving: {e}")
 
-        with open(full_output_path, "w", encoding="utf-8") as md:
-            for content in contents:
-                md.write(f"# {content['pdf_name']} - Page {content['page_number']}\n\n")
-                md.write(f"## Text\n\n{content['text']}\n\n")
+    def convert_markdown_to_html(self, markdown_file, output_html_file):
+        try:
+            with open(markdown_file, "r", encoding="utf-8") as file:
+                md_content = file.read()
+            html_content = markdown.markdown(md_content)
+            full_html_path = os.path.join(self.output_dir, output_html_file)
+            with open(full_html_path, "w", encoding="utf-8") as html_file:
+                html_file.write(html_content)
 
-                if content["images"]:
-                    md.write(f"## Images\n\n")
-                    for image_path in content["images"]:
-                        description = self.view_image_metadata(image_path)
-                        md.write(f"![Image](file:///{os.path.abspath(image_path)})\n\n")
-                        md.write(f"*Description:* {description}\n\n")
-                if content["tables_structured"]:
-                    md.write(f"## Structured Tables\n\n")
-                    for table_path in content["tables_structured"]:
-                        markdown_table = self.convert_csv_to_markdown(table_path)
-                        if markdown_table == "":
-                            md.write("No structured table\n\n")
-                        else:
-                            md.write(markdown_table + "\n\n")
-
-                md.write("\n")
+            print(f"HTML file saved at: {full_html_path}")
+            webbrowser.open(f"file://{os.path.abspath(full_html_path)}")
+        except Exception as e:
+            print(f"Error converting Markdown to HTML: {e}")
 
     def dump_to_markdown_helper(self):
-        self.dump_to_markdown("test_output.md")
-        print(f"Content has been saved to {os.path.join(self.output_dir, 'test_output.md')}")
+        try:
+            markdown_file = os.path.join(self.output_dir, "test_output.md")
+            self.dump_to_markdown(markdown_file)
+            print(f"Content has been saved to {markdown_file}")
+            self.convert_markdown_to_html(markdown_file, "test_output.html")
+            return markdown_file
+        except Exception as e:
+            print(f"Error during Markdown generation for {self.output_dir}: {e}")
